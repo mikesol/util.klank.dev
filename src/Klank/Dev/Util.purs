@@ -41,6 +41,7 @@ fetchVideo str =
     video <- case node of
       Nothing -> throwError (error "Could not convert to video node")
       Just x -> pure x
+    HTMLMediaElement.setCrossOrigin "anonymous" (HTMLVideoElement.toHTMLMediaElement video)
     videoListener <- eventListener \e -> res video
     addEventListener
       (EventType "loadeddata")
@@ -61,6 +62,7 @@ fetchImage :: String -> Aff HTMLImageElement
 fetchImage str =
   affize \res rej -> do
     image <- HTMLImageElement.create unit
+    HTMLImageElement.setCrossOrigin "anonymous" image
     imageListener <- eventListener \e -> res image
     addEventListener
       (EventType "load")
