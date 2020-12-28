@@ -74,6 +74,8 @@ fetchCanvas ci = do
     canvas <- case node of
       Nothing -> throwError (error "Could not convert to canvas node")
       Just x -> pure x
+    HTMLCanvasElement.setWidth ci.width canvas
+    HTMLCanvasElement.setHeight ci.height canvas
     canvasCtx <- getContext2D $ htmlCanvasElementToCanvasElement canvas
     words <- measurableTextToMetrics canvasCtx ci.words
     let
@@ -174,6 +176,8 @@ type CanvasInfo
     , videos :: Array (Tuple String String)
     , painting :: { words :: M.Map MeasurableText TextMetrics } -> Painting
     , words :: List MeasurableText
+    , width :: Int
+    , height :: Int
     }
 
 htmlCanvasElementToCanvasElement :: HTMLCanvasElement.HTMLCanvasElement -> CanvasElement
