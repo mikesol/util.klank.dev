@@ -84,6 +84,7 @@ fetchCanvas ci = do
       { canvases: O.empty
       , images
       , videos
+      , webcam: Nothing
       }
       painting
     pure canvas
