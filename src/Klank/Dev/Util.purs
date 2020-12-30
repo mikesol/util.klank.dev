@@ -5,7 +5,7 @@ import Control.Promise (toAffE)
 import Data.Array (filter)
 import Data.Either (Either(..), either)
 import Data.Lens (_2, over)
-import Data.List (List)
+import Data.List (List(..))
 import Data.Map as M
 import Data.Maybe (Maybe(..))
 import Data.Traversable (sequence)
@@ -19,6 +19,7 @@ import Foreign.Object (Object, fromHomogeneous)
 import Foreign.Object as O
 import Graphics.Canvas (CanvasElement, TextMetrics, getContext2D)
 import Graphics.Painting (MeasurableText, Painting, render, measurableTextToMetrics)
+import Prim.RowList (Nil)
 import Type.Klank.Dev (Buffers, Images, Videos, Canvases)
 import Type.Row.Homogeneous (class Homogeneous)
 import Unsafe.Coerce (unsafeCoerce)
@@ -84,7 +85,7 @@ fetchCanvas ci = do
       { canvases: O.empty
       , images
       , videos
-      , webcam: Nothing
+      , webcam: Nil
       }
       painting
     pure canvas
