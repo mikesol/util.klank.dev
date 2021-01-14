@@ -1,6 +1,7 @@
 module Klank.Dev.Util where
 
 import Prelude
+
 import Control.Promise (toAffE)
 import Data.Array (filter)
 import Data.Either (Either(..), either)
@@ -12,14 +13,13 @@ import Data.Traversable (sequence)
 import Data.Tuple (Tuple(..), fst)
 import Effect (Effect)
 import Effect.Aff (Aff, Milliseconds(..), delay, error, launchAff_, makeAff, parallel, sequential, throwError, try)
-import Effect.Class (liftEffect)
+import Effect.Class (class MonadEffect, liftEffect)
 import Effect.Exception (Error)
 import FRP.Behavior.Audio (BrowserAudioBuffer, decodeAudioDataFromUri)
 import Foreign.Object (Object, fromHomogeneous)
 import Foreign.Object as O
 import Graphics.Canvas (CanvasElement, TextMetrics, getContext2D)
 import Graphics.Painting (MeasurableText, Painting, render, measurableTextToMetrics)
-import Prim.RowList (Nil)
 import Type.Klank.Dev (Buffers, Images, Videos, Canvases)
 import Type.Row.Homogeneous (class Homogeneous)
 import Unsafe.Coerce (unsafeCoerce)
@@ -65,10 +65,8 @@ fetchVideo str =
       (HTMLVideoElement.toEventTarget video)
     HTMLMediaElement.setSrc str (HTMLVideoElement.toHTMLMediaElement video)
 
-fetchCanvas :: CanvasInfo -> Aff HTMLCanvasElement.HTMLCanvasElement
-fetchCanvas ci = do
-  images <- affize \res rej -> makeImagesKeepingCache 20 ci.images O.empty res rej
-  videos <- affize \res rej -> makeVideosKeepingCache 20 ci.videos O.empty res rej
+fetchCanvas' :: ∀ eff rest. MonadEffect eff => Object HTMLImageElement.HTMLImageElement -> Object HTMLVideoElement.HTMLVideoElement -> { height :: Int , painting :: { words :: M.Map MeasurableText { width :: Number } } -> Painting , width :: Int , words :: List MeasurableText | rest } -> eff HTMLCanvasElement.HTMLCanvasElement
+fetchCanvas' images videos ci = do
   liftEffect do
     document <- (toDocument <$> (document =<< window))
     node <- HTMLCanvasElement.fromElement <$> (createElement "canvas" document)
@@ -89,6 +87,14 @@ fetchCanvas ci = do
       }
       painting
     pure canvas
+
+fetchCanvas :: CanvasInfo -> Aff HTMLCanvasElement.HTMLCanvasElement
+fetchCanvas ci = do
+  { images, videos } <- sequential $ { images: _, videos: _ }
+      <$> parallel (affize \res rej -> makeImagesKeepingCache 20 ci.images O.empty res rej )
+      <*> parallel (affize \res rej -> makeVideosKeepingCache 20 ci.videos O.empty res rej )
+  fetchCanvas' images videos ci
+
 
 fetchImage :: String -> Aff HTMLImageElement.HTMLImageElement
 fetchImage str =
@@ -172,6 +178,32 @@ makeCanvasesUsingCache = makeSomethingUsingCache fetchCanvas
 
 makeCanvasesKeepingCache :: Int -> Array (Tuple String CanvasInfo) -> Canvases
 makeCanvasesKeepingCache maxAttempts = (makeCanvasesUsingCache maxAttempts) <<< Tuple
+
+type CanvasImageInfo
+  = { images :: Array (Tuple String String)
+    , videos :: Array (Tuple String String)
+    }
+
+type CanvasRenderInfo = {
+     painting :: { words :: M.Map MeasurableText TextMetrics } -> Painting
+    , words :: List MeasurableText
+    , width :: Int
+    , height :: Int
+}
+
+canvasAff :: Int -> CanvasImageInfo -> CacheFunction HTMLCanvasElement.HTMLCanvasElement CanvasRenderInfo -> Object HTMLCanvasElement.HTMLCanvasElement -> Aff (Object HTMLCanvasElement.HTMLCanvasElement)
+canvasAff i cii cf o = do
+  { images, videos } <- sequential $ { images: _, videos: _ }
+      <$> parallel (affize \res rej -> makeImagesKeepingCache i cii.images O.empty res rej )
+      <*> parallel (affize \res rej -> makeVideosKeepingCache i cii.videos O.empty res rej )
+  affize \res rej -> makeSomethingUsingCache (fetchCanvas' images videos) i cf o res rej
+
+makePooledCanvasesUsingCache :: Int -> CanvasImageInfo -> CacheFunction HTMLCanvasElement.HTMLCanvasElement CanvasRenderInfo -> Canvases
+makePooledCanvasesUsingCache i cii cf o = affable (canvasAff i cii cf o)
+
+makePooledCanvasesKeepingCache :: Int -> CanvasImageInfo -> Array (Tuple String CanvasRenderInfo) -> Canvases
+makePooledCanvasesKeepingCache i cii a = makePooledCanvasesUsingCache i cii (\x -> Tuple a x)
+
 
 type CanvasInfo
   = { images :: Array (Tuple String String)
