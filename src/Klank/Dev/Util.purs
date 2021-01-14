@@ -1,7 +1,6 @@
 module Klank.Dev.Util where
 
 import Prelude
-
 import Control.Promise (toAffE)
 import Data.Array (filter)
 import Data.Either (Either(..), either)
@@ -65,8 +64,8 @@ fetchVideo str =
       (HTMLVideoElement.toEventTarget video)
     HTMLMediaElement.setSrc str (HTMLVideoElement.toHTMLMediaElement video)
 
-fetchCanvas' :: ∀ eff rest. MonadEffect eff => Object HTMLImageElement.HTMLImageElement -> Object HTMLVideoElement.HTMLVideoElement -> { height :: Int , painting :: { words :: M.Map MeasurableText { width :: Number } } -> Painting , width :: Int , words :: List MeasurableText | rest } -> eff HTMLCanvasElement.HTMLCanvasElement
-fetchCanvas' images videos ci = do
+fetchCanvas' :: ∀ eff rest. MonadEffect eff => Object HTMLImageElement.HTMLImageElement -> Object HTMLVideoElement.HTMLVideoElement -> { height :: Int, painting :: { words :: M.Map MeasurableText { width :: Number } } -> Painting, width :: Int, words :: List MeasurableText | rest } -> eff HTMLCanvasElement.HTMLCanvasElement
+fetchCanvas' images videos ci =
   liftEffect do
     document <- (toDocument <$> (document =<< window))
     node <- HTMLCanvasElement.fromElement <$> (createElement "canvas" document)
@@ -90,11 +89,11 @@ fetchCanvas' images videos ci = do
 
 fetchCanvas :: CanvasInfo -> Aff HTMLCanvasElement.HTMLCanvasElement
 fetchCanvas ci = do
-  { images, videos } <- sequential $ { images: _, videos: _ }
-      <$> parallel (affize \res rej -> makeImagesKeepingCache 20 ci.images O.empty res rej )
-      <*> parallel (affize \res rej -> makeVideosKeepingCache 20 ci.videos O.empty res rej )
+  { images, videos } <-
+    sequential $ { images: _, videos: _ }
+      <$> parallel (affize \res rej -> makeImagesKeepingCache 20 ci.images O.empty res rej)
+      <*> parallel (affize \res rej -> makeVideosKeepingCache 20 ci.videos O.empty res rej)
   fetchCanvas' images videos ci
-
 
 fetchImage :: String -> Aff HTMLImageElement.HTMLImageElement
 fetchImage str =
@@ -136,19 +135,34 @@ loopDownload f maxAttempts str = go 0
 
 makeSomethingUsingCache :: forall a b. (b -> Aff a) -> Int -> (O.Object a -> Tuple (Array (Tuple String b)) (O.Object a)) -> O.Object a -> (O.Object a -> Effect Unit) -> (Error -> Effect Unit) -> Effect Unit
 makeSomethingUsingCache looper maxAttempts bf prev' =
-  affable do
-    sequential
-      ( O.union <$> (pure prev)
-          <*> ( sequence
-                $ O.fromFoldable
-                    ( map
-                        ( over _2
-                            (parallel <<< loopDownload looper maxAttempts)
-                        )
-                        (filter (not <<< flip O.member prev <<< fst) newB)
-                    )
-            )
-      )
+  affable
+    $ sequential
+        ( O.union <$> (pure prev)
+            <*> ( sequence
+                  $ O.fromFoldable
+                      ( map
+                          ( over _2
+                              (parallel <<< loopDownload looper maxAttempts)
+                          )
+                          (filter (not <<< flip O.member prev <<< fst) newB)
+                      )
+              )
+        )
+  where
+  (Tuple newB prev) = bf prev'
+
+makeSomethingUsingCacheSync :: forall a b. (b -> Aff a) -> (O.Object a -> Tuple (Array (Tuple String b)) (O.Object a)) -> O.Object a -> (O.Object a -> Effect Unit) -> (Error -> Effect Unit) -> Effect Unit
+makeSomethingUsingCacheSync funk bf prev' =
+  affable
+    ( O.union <$> (pure prev)
+        <*> ( sequence
+              $ O.fromFoldable
+                  ( map
+                      (over _2 funk)
+                      (filter (not <<< flip O.member prev <<< fst) newB)
+                  )
+          )
+    )
   where
   (Tuple newB prev) = bf prev'
 
@@ -184,26 +198,27 @@ type CanvasImageInfo
     , videos :: Array (Tuple String String)
     }
 
-type CanvasRenderInfo = {
-     painting :: { words :: M.Map MeasurableText TextMetrics } -> Painting
+type CanvasRenderInfo
+  = { painting :: { words :: M.Map MeasurableText TextMetrics } -> Painting
     , words :: List MeasurableText
     , width :: Int
     , height :: Int
-}
+    }
 
 canvasAff :: Int -> CanvasImageInfo -> CacheFunction HTMLCanvasElement.HTMLCanvasElement CanvasRenderInfo -> Object HTMLCanvasElement.HTMLCanvasElement -> Aff (Object HTMLCanvasElement.HTMLCanvasElement)
 canvasAff i cii cf o = do
-  { images, videos } <- sequential $ { images: _, videos: _ }
-      <$> parallel (affize \res rej -> makeImagesKeepingCache i cii.images O.empty res rej )
-      <*> parallel (affize \res rej -> makeVideosKeepingCache i cii.videos O.empty res rej )
-  affize \res rej -> makeSomethingUsingCache (fetchCanvas' images videos) i cf o res rej
+  { images, videos } <-
+    sequential $ { images: _, videos: _ }
+      <$> parallel (affize \res rej -> makeImagesKeepingCache i cii.images O.empty res rej)
+      <*> parallel (affize \res rej -> makeVideosKeepingCache i cii.videos O.empty res rej)
+  -- we use the sync version to avoid parallel video seeks
+  affize \res rej -> makeSomethingUsingCacheSync (fetchCanvas' images videos) cf o res rej
 
 makePooledCanvasesUsingCache :: Int -> CanvasImageInfo -> CacheFunction HTMLCanvasElement.HTMLCanvasElement CanvasRenderInfo -> Canvases
 makePooledCanvasesUsingCache i cii cf o = affable (canvasAff i cii cf o)
 
 makePooledCanvasesKeepingCache :: Int -> CanvasImageInfo -> Array (Tuple String CanvasRenderInfo) -> Canvases
 makePooledCanvasesKeepingCache i cii a = makePooledCanvasesUsingCache i cii (\x -> Tuple a x)
-
 
 type CanvasInfo
   = { images :: Array (Tuple String String)
