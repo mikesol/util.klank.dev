@@ -19,7 +19,7 @@ import Foreign.Object (Object, fromHomogeneous)
 import Foreign.Object as O
 import Graphics.Canvas (CanvasElement, TextMetrics, getContext2D)
 import Graphics.Painting (MeasurableText, Painting, render, measurableTextToMetrics)
-import Type.Klank.Dev (Buffers, Images, Videos, Canvases)
+import Type.Klank.Dev (Buffers, Canvases, Videos, Images)
 import Type.Row.Homogeneous (class Homogeneous)
 import Unsafe.Coerce (unsafeCoerce)
 import Web.DOM.Document (createElement)
@@ -89,10 +89,7 @@ fetchCanvas' images videos ci =
 
 fetchCanvas :: CanvasInfo -> Aff HTMLCanvasElement.HTMLCanvasElement
 fetchCanvas ci = do
-  { images, videos } <-
-    sequential $ { images: _, videos: _ }
-      <$> parallel (affize \res rej -> makeImagesKeepingCache 20 ci.images O.empty res rej)
-      <*> parallel (affize \res rej -> makeVideosKeepingCache 20 ci.videos O.empty res rej)
+  { images, videos } <- imagesAndVideos 20 ci.images ci.videos
   fetchCanvas' images videos ci
 
 fetchImage :: String -> Aff HTMLImageElement.HTMLImageElement
@@ -193,7 +190,7 @@ makeCanvasesUsingCache = makeSomethingUsingCache fetchCanvas
 makeCanvasesKeepingCache :: Int -> Array (Tuple String CanvasInfo) -> Canvases
 makeCanvasesKeepingCache maxAttempts = (makeCanvasesUsingCache maxAttempts) <<< Tuple
 
-type CanvasImageInfo
+type MediaInfo
   = { images :: Array (Tuple String String)
     , videos :: Array (Tuple String String)
     }
@@ -205,20 +202,58 @@ type CanvasRenderInfo
     , height :: Int
     }
 
-canvasAff :: Int -> CanvasImageInfo -> CacheFunction HTMLCanvasElement.HTMLCanvasElement CanvasRenderInfo -> Object HTMLCanvasElement.HTMLCanvasElement -> Aff (Object HTMLCanvasElement.HTMLCanvasElement)
+type CanvasAsImageRenderInfo
+  = { painting :: { words :: M.Map MeasurableText TextMetrics } -> Painting
+    , words :: List MeasurableText
+    , width :: Int
+    , height :: Int
+    , quality :: Number
+    }
+
+foreign import toJpegDataUrl :: Number -> HTMLCanvasElement.HTMLCanvasElement -> Effect String
+
+foreign import imageStringToImage :: String -> Effect HTMLImageElement.HTMLImageElement
+
+imagesAndVideos :: Int -> Array (Tuple String String) -> Array (Tuple String String) -> Aff { images :: Object HTMLImageElement.HTMLImageElement, videos :: Object HTMLVideoElement.HTMLVideoElement }
+imagesAndVideos i images videos =
+  sequential $ { images: _, videos: _ }
+    <$> parallel (affize \res rej -> makeImagesKeepingCache i images O.empty res rej)
+    <*> parallel (affize \res rej -> makeVideosKeepingCache i videos O.empty res rej)
+
+canvasAff :: Int -> MediaInfo -> CacheFunction HTMLCanvasElement.HTMLCanvasElement CanvasRenderInfo -> Object HTMLCanvasElement.HTMLCanvasElement -> Aff (Object HTMLCanvasElement.HTMLCanvasElement)
 canvasAff i cii cf o = do
-  { images, videos } <-
-    sequential $ { images: _, videos: _ }
-      <$> parallel (affize \res rej -> makeImagesKeepingCache i cii.images O.empty res rej)
-      <*> parallel (affize \res rej -> makeVideosKeepingCache i cii.videos O.empty res rej)
+  { images, videos } <- imagesAndVideos i cii.images cii.videos
   -- we use the sync version to avoid parallel video seeks
   affize \res rej -> makeSomethingUsingCacheSync (fetchCanvas' images videos) cf o res rej
 
-makePooledCanvasesUsingCache :: Int -> CanvasImageInfo -> CacheFunction HTMLCanvasElement.HTMLCanvasElement CanvasRenderInfo -> Canvases
+imageFromCanvasAff :: Int -> MediaInfo -> CacheFunction HTMLImageElement.HTMLImageElement CanvasAsImageRenderInfo -> Object HTMLImageElement.HTMLImageElement -> Aff (Object HTMLImageElement.HTMLImageElement)
+imageFromCanvasAff i cii cf o = do
+  { images, videos } <- imagesAndVideos i cii.images cii.videos
+  -- we use the sync version to avoid parallel video seeks
+  affize \res rej ->
+    makeSomethingUsingCacheSync
+      ( \{ painting, words, width, height, quality } ->
+          liftEffect
+            $ fetchCanvas' images videos { painting, words, width, height }
+            >>= toJpegDataUrl quality
+            >>= imageStringToImage
+      )
+      cf
+      o
+      res
+      rej
+
+makePooledCanvasesUsingCache :: Int -> MediaInfo -> CacheFunction HTMLCanvasElement.HTMLCanvasElement CanvasRenderInfo -> Canvases
 makePooledCanvasesUsingCache i cii cf o = affable (canvasAff i cii cf o)
 
-makePooledCanvasesKeepingCache :: Int -> CanvasImageInfo -> Array (Tuple String CanvasRenderInfo) -> Canvases
-makePooledCanvasesKeepingCache i cii a = makePooledCanvasesUsingCache i cii (\x -> Tuple a x)
+makePooledCanvasesKeepingCache :: Int -> MediaInfo -> Array (Tuple String CanvasRenderInfo) -> Canvases
+makePooledCanvasesKeepingCache i cii = makePooledCanvasesUsingCache i cii <<< Tuple
+
+makePooledImagesFromCanvasesUsingCache :: Int -> MediaInfo -> CacheFunction HTMLImageElement.HTMLImageElement CanvasAsImageRenderInfo -> Images
+makePooledImagesFromCanvasesUsingCache i cii cf o = affable (imageFromCanvasAff i cii cf o)
+
+makePooledImagesFromCanvasesKeepingCache :: Int -> MediaInfo -> Array (Tuple String CanvasAsImageRenderInfo) -> Images
+makePooledImagesFromCanvasesKeepingCache i cii = makePooledImagesFromCanvasesUsingCache i cii <<< Tuple
 
 type CanvasInfo
   = { images :: Array (Tuple String String)
