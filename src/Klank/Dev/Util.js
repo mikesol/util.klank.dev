@@ -1,7 +1,7 @@
 exports.toJpegDataUrl = function (quality) {
   return function (c) {
     return function () {
-      return c.toDataUrl("image/jpeg", quality);
+      return c.toDataURL("image/jpeg", quality);
     };
   };
 };
